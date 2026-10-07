@@ -34,6 +34,10 @@
 > vocabulary are in [`docs/ste-style-guide.md`](docs/ste-style-guide.md). Each term in the
 > [Glossary](#15-glossary) has only one meaning.
 
+> [!CAUTION]
+> Do not use telehealth-insights for medical advice or for a clinical decision. The results are survey associations
+> from physician reports. A person with survey and clinical knowledge must review each result.
+
 ---
 
 > [!WARNING]
@@ -428,8 +432,7 @@ Planned milestones (not built): a weighted proportional-odds model, replicate-we
 
 | Validation | Result | Command |
 |---|---|---|
-| Unit tests | **36 passed** | `pytest -q` |
-| Expected CI | 36 passed in a clean venv with `.[dev]` only (pandas 3.0, SciPy 1.18) | `.github/workflows/ci.yml` |
+| Unit tests (CI installs only `.[dev]`) | **36 passed** (pandas 3.0, SciPy 1.18) | `pytest -q` |
 | Synthetic share of users | 0.640 [0.625, 0.655] | `telehealth-insights analyze` |
 | Synthetic Q2, quality, video | +0.159 [+0.113, +0.205], Holm p < 0.0001 | `telehealth-insights analyze` |
 | Synthetic Q2, quality, telephone | −0.079 [−0.122, −0.037], Holm p = 0.0012 | `telehealth-insights analyze` |
