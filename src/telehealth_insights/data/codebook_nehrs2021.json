@@ -1,0 +1,60 @@
+{
+  "name": "NEHRS 2021 physician public-use file (analysis subset)",
+  "verify": "The code values and labels below are working assumptions. Check each one against the official NCHS codebook before you publish a result.",
+  "missing_codes": {
+    "-6": "not applicable (skip pattern)",
+    "-7": "not ascertained",
+    "-8": "do not know",
+    "-9": "refused or blank"
+  },
+  "design": {
+    "id": "phyid_p",
+    "weight": "mailwgt",
+    "strata": "strat_p",
+    "psu": null
+  },
+  "variables": {
+    "telemedicine": {
+      "role": "exposure",
+      "type": "binary",
+      "label": "Used telemedicine in the last 12 months",
+      "yes": 1,
+      "no": 2,
+      "universe": "all physicians"
+    },
+    "telemedqual": {
+      "role": "outcome",
+      "type": "ordinal",
+      "label": "Quality of care with telemedicine",
+      "codes": [1, 2, 3, 4, 5],
+      "favourable": [4, 5],
+      "favourable_label": "good or very good quality",
+      "universe": "telemedicine users"
+    },
+    "telemedsat": {
+      "role": "outcome",
+      "type": "ordinal",
+      "label": "Satisfaction with telemedicine",
+      "codes": [1, 2, 3, 4, 5],
+      "favourable": [4, 5],
+      "favourable_label": "satisfied or very satisfied",
+      "universe": "telemedicine users"
+    },
+    "timedoc": {
+      "role": "outcome",
+      "type": "ordinal",
+      "label": "Time spent on documentation",
+      "codes": [1, 2, 3, 4, 5],
+      "favourable": [4, 5],
+      "favourable_label": "high documentation time (top two bands)",
+      "universe": "all physicians"
+    },
+    "telemedtool1": {"role": "tool", "type": "binary", "label": "Telephone (audio only)", "yes": 1, "no": 2, "universe": "telemedicine users"},
+    "telemedtool2": {"role": "tool", "type": "binary", "label": "Video conference", "yes": 1, "no": 2, "universe": "telemedicine users"},
+    "telemedtool3": {"role": "tool", "type": "binary", "label": "Telemedicine platform", "yes": 1, "no": 2, "universe": "telemedicine users"},
+    "telemedtool4": {"role": "tool", "type": "binary", "label": "Platform integrated with the EHR", "yes": 1, "no": 2, "universe": "telemedicine users"},
+    "specialty": {"role": "control", "type": "categorical", "label": "Specialty group", "codes": [1, 2, 3, 4]},
+    "practice_size": {"role": "control", "type": "categorical", "label": "Practice size band", "codes": [1, 2, 3]},
+    "setting": {"role": "control", "type": "categorical", "label": "Practice setting", "codes": [1, 2, 3]}
+  }
+}
