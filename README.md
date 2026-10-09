@@ -77,6 +77,7 @@ This README is the **one location that explains all of telehealth-insights**. It
 4. 🔄 [The end-to-end workflow](#4-the-end-to-end-workflow)
    - 4.1 [Full flow](#41-full-flow)
    - 4.2 [The life cycle of one analysis](#42-the-life-cycle-of-one-analysis)
+   - 4.3 [Who does which step](#43-who-does-which-step)
 5. 🔵 [The codebook and the decoder](#5-the-codebook-and-the-decoder)
 6. 🟢 [The survey design](#6-the-survey-design)
 7. 🟣 [The analysis questions](#7-the-analysis-questions)
@@ -140,6 +141,42 @@ flowchart LR
 | Synthetic data | `src/telehealth_insights/synthetic.py` | Fake survey rows with skip codes and known effects |
 | CLI | `src/telehealth_insights/cli.py` | The `telehealth-insights` command with 4 subcommands |
 
+The component map shows which module calls which module. An arrow points from the caller to the module that it uses.
+
+```mermaid
+flowchart TB
+    subgraph ENTRY["Entry point"]
+        CLI["cli.py<br/>main, 4 subcommands"]
+    end
+    subgraph INPUT["Data in"]
+        CFG["config.py<br/>load_env_file, Settings"]
+        CB["codebook.py<br/>load, parse"]
+        CBJ[("data/codebook_nehrs2021.json")]
+        SYN["synthetic.py<br/>generate"]
+        DEC["decode.py<br/>decode, DecodeReport"]
+    end
+    subgraph STATS["Estimates"]
+        ANA["analyses.py<br/>run_all"]
+        DES["design.py<br/>SurveyDesign, holm"]
+        MOD["models.py<br/>design_matrix, weighted_logit"]
+    end
+    subgraph OUTPUT["Report"]
+        REP["report.py<br/>write, markdown"]
+        CH["charts.py<br/>interval_chart"]
+    end
+    CLI --> CFG
+    CLI --> CB
+    CB --> CBJ
+    CLI --> SYN
+    CLI --> DEC
+    CLI --> ANA
+    CLI --> REP
+    ANA --> DES
+    ANA --> MOD
+    MOD --> DES
+    REP --> CH
+```
+
 ### 2.2 System context
 
 ```mermaid
@@ -180,6 +217,18 @@ telehealth-insights/
 ### 3.2 Each question fits the skip pattern
 Items for users only are NaN for non-users. Thus the quality and satisfaction items are compared among users only, and the documentation item is compared between users and non-users.
 
+The diagram shows how the universe of an outcome selects its question.
+
+```mermaid
+flowchart LR
+    OUT[/"Outcome in the codebook"/] --> U{"universe"}
+    U -- "telemedicine users<br/>telemedqual, telemedsat" --> Q2["Q2 tool_comparisons<br/>domain: users only"]
+    U -- "all physicians<br/>timedoc" --> Q3["Q3 exposure_comparisons<br/>users minus non-users"]
+    Q2 --> R2[/"Tool users minus other users,<br/>joint model of the 4 tools"/]
+    Q3 --> R3[/"Unadjusted difference,<br/>adjusted odds ratio"/]
+    OUT --> Q1["Q1 describe<br/>in the item universe"]
+```
+
 ### 3.3 Each estimate uses the survey design
 `SurveyDesign` uses the weights, the strata and the PSUs (if the codebook names a PSU column). Standard errors come from Taylor linearisation, and the CIs use a t distribution with PSUs minus strata degrees of freedom.
 
@@ -209,22 +258,60 @@ Each comparison gives a difference in favourable share or an odds ratio with a 9
 ### 4.1 Full flow
 
 ```mermaid
-flowchart TB
-    CSV["Survey CSV or synthetic rows"] --> CB["load the codebook"]
-    CB --> DEC["decode: missing codes to NaN, binary to 0/1"]
-    DEC --> UNI["universe rule: user items are NaN for non-users"]
+flowchart TD
+    CBJ[/"Codebook JSON<br/>bundled or TELEHEALTH_CODEBOOK"/] --> CHK{{"RESEARCHER<br/>checks the codebook<br/>against NCHS"}}
+    CHK --> CB["codebook.load: roles, types, codes"]
+    SRC{"--data or TELEHEALTH_DATA set?"} -- "yes" --> CSV[/"Survey CSV"/]
+    SRC -- "no" --> SYN["synthetic.generate<br/>seed TELEHEALTH_SEED"]
+    CSV --> DEC["decode: missing codes to NaN, binary to 0/1"]
+    SYN --> DEC
+    CB --> DEC
+    DEC --> UNK{"Unknown code?"}
+    UNK -- "yes, strict" --> ERR[/"DecodeError<br/>error: and exit 1"/]
+    UNK -- "no, or --lenient" --> UNI["universe rule: user items are NaN for non-users"]
     UNI --> DES["SurveyDesign: weights, strata, PSU"]
     DES --> Q1["Q1 describe: weighted shares"]
     DES --> Q2["Q2 tools among users: differences and joint model"]
     DES --> Q3["Q3 users vs non-users: difference and adjusted model"]
-    Q2 --> FAM["primary tests"]
+    Q2 --> FAM["primary_tests: 9 tests"]
     Q3 --> FAM
     FAM --> HOLM["Holm correction"]
-    Q1 --> REP["report.md, results.json, charts"]
+    Q1 --> REP["report.write"]
     HOLM --> REP
+    REP --> STORE[("reports/name/<br/>report.md, results.json, charts/")]
+    STORE --> REV{{"HUMAN<br/>person with survey and clinical<br/>knowledge reviews each result"}}
+
+    classDef human fill:#fff3cd,stroke:#b8901f,color:#3d2f00,font-weight:bold
+    class CHK,REV human
 ```
 
 ### 4.2 The life cycle of one analysis
+
+```mermaid
+stateDiagram-v2
+    state "Settings loaded" as Settings
+    state "Codebook checked" as Codebook
+    state "Raw table" as Raw
+    state "Decoded table" as Decoded
+    state "Survey design" as Design
+    state "Estimates Q1 to Q3" as Estimates
+    state "Primary tests with Holm p" as Tests
+    state "Report folder written" as Written
+    state "error: message, exit 1" as Failed
+    [*] --> Settings: load_env_file, Settings.from_env
+    Settings --> Failed: TELEHEALTH_ALPHA not in 0 to 0.5
+    Settings --> Codebook: codebook.load
+    Codebook --> Failed: CodebookError
+    Codebook --> Raw: read the CSV or generate rows
+    Raw --> Decoded: decode
+    Raw --> Failed: DecodeError
+    Decoded --> Design: run_all makes SurveyDesign
+    Design --> Estimates: describe, tool_comparisons, exposure_comparisons
+    Estimates --> Tests: primary_tests and holm
+    Tests --> Written: report.write
+    Written --> [*]
+    Failed --> [*]
+```
 
 1. The CLI reads `.env` and loads the codebook.
 2. The CLI reads the survey CSV, or it generates synthetic rows.
@@ -236,11 +323,62 @@ flowchart TB
 8. `primary_tests` collects the 9 tests and adds the Holm p-values.
 9. `write` saves the report, the JSON results and the charts.
 
+### 4.3 Who does which step
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor R as Researcher
+    participant CLI as cli.py
+    participant CFG as config.py
+    participant CB as codebook.py
+    participant DEC as decode.py
+    participant ANA as analyses.py
+    participant DES as SurveyDesign and weighted_logit
+    participant REP as report.py
+    participant FS as Report folder
+
+    R->>CLI: telehealth-insights analyze --data file.csv
+    CLI->>CFG: load_env_file(.env), Settings.from_env
+    CFG-->>CLI: Settings
+    CLI->>CB: load(codebook path or bundled file)
+    CB-->>CLI: Codebook
+    CLI->>CLI: pd.read_csv, or synthetic.generate if no data path
+    CLI->>DEC: decode(raw, book, strict)
+    DEC-->>CLI: decoded table and DecodeReport
+    CLI->>ANA: run_all(df, book, alpha)
+    ANA->>DES: SurveyDesign.from_frame
+    ANA->>DES: mean, difference, weighted_logit
+    DES-->>ANA: Estimates and model tables
+    ANA->>ANA: primary_tests, holm
+    ANA-->>CLI: results dictionary
+    CLI->>REP: write(out_dir, results, book, source, summary)
+    REP->>FS: charts/*.svg, results.json, report.md
+    CLI-->>R: telemedicine share, 9 primary tests, report path
+```
+
 ---
 
 ## 5. The codebook and the decoder
 
 **Purpose.** Give each column one role, one type and one set of valid codes, and decode the raw values with them.
+
+The first diagram shows how `codebook.load` checks the codebook file.
+
+```mermaid
+flowchart TD
+    IN[/"--codebook, TELEHEALTH_CODEBOOK<br/>or the bundled JSON"/] --> JS["json.loads"]
+    JS --> KEYS{"design and<br/>variables keys present?"}
+    KEYS -- "no" --> ERR[/"CodebookError"/]
+    KEYS -- "yes" --> VAR["_variable for each item:<br/>role, type, codes"]
+    VAR --> VCHK{"Role and type known,<br/>codes not negative,<br/>favourable a proper subset?"}
+    VCHK -- "no" --> ERR
+    VCHK -- "yes" --> MC{"Missing codes negative<br/>and design.weight set?"}
+    MC -- "no" --> ERR
+    MC -- "yes" --> EXP{"Exactly one exposure,<br/>and it is binary?"}
+    EXP -- "no" --> ERR
+    EXP -- "yes" --> OUT[/"Codebook"/]
+```
 
 | Codebook key | Meaning |
 |---|---|
@@ -257,8 +395,30 @@ flowchart TB
 3. For each item, count each missing code and each blank, then set them to NaN.
 4. Refuse a code that is not valid for the item. With `--lenient`, set it to NaN and count it.
 5. Change a binary item to 1.0 (yes) or 0.0 (no).
-6. Set each users-only item to NaN for non-users. Count the answers that this removes.
+6. Set each users-only item to NaN for non-users and for rows with a missing exposure. Count the answers that this removes.
 7. Check that no negative value is left.
+
+The second diagram shows how `decode` changes the raw table.
+
+```mermaid
+flowchart TD
+    RAW[/"Raw table"/] --> COLS{"All codebook<br/>columns present?"}
+    COLS -- "no" --> DE[/"DecodeError"/]
+    COLS -- "yes" --> W{"Weight a number above 0,<br/>no missing stratum or PSU?"}
+    W -- "no" --> DE
+    W -- "yes" --> ITEM["For each item:<br/>count missing codes and blanks,<br/>set them to NaN"]
+    ITEM --> VALID{"Code valid<br/>for the item?"}
+    VALID -- "no, strict" --> DE
+    VALID -- "no, --lenient" --> NAN["Set NaN,<br/>count as unknown"]
+    VALID -- "yes" --> BIN{"Binary item?"}
+    NAN --> BIN
+    BIN -- "yes" --> MAP["yes to 1.0, no to 0.0"]
+    BIN -- "no" --> UNI
+    MAP --> UNI["Users-only items:<br/>NaN where exposure is not 1.0,<br/>count out_of_universe"]
+    UNI --> NEG{"Negative value left?"}
+    NEG -- "yes" --> AE[/"AssertionError"/]
+    NEG -- "no" --> OUT[/"Decoded table and DecodeReport"/]
+```
 
 **Rules**
 
@@ -271,6 +431,25 @@ flowchart TB
 ## 6. The survey design
 
 **Purpose.** Give design-based estimates, standard errors and confidence intervals.
+
+The first diagram shows how `SurveyDesign` gives one estimate with its CI.
+
+```mermaid
+flowchart TD
+    IN[/"y, domain, weights,<br/>strata, PSU"/] --> DOM["Domain: rows in the domain<br/>with a value of y"]
+    DOM --> EMP{"Domain empty?"}
+    EMP -- "yes" --> VE[/"ValueError"/]
+    EMP -- "no" --> TH["theta: weighted mean,<br/>or difference of 2 group means"]
+    TH --> Z["Influence values z_i"]
+    Z --> TOT["variance_of_total:<br/>sum z in each PSU"]
+    TOT --> NH{"PSUs in the stratum"}
+    NH -- "2 or more" --> C1["Centre on the stratum mean,<br/>times n_h / n_h − 1"]
+    NH -- "1" --> C2["Centre on the mean<br/>of all PSU totals"]
+    C1 --> V["Add the strata: V"]
+    C2 --> V
+    V --> SE["se = square root of V"]
+    SE --> CI[/"Estimate: value, se,<br/>t CI with df = PSUs − strata,<br/>p_value"/]
+```
 
 | Estimate | Value | Influence value z_i |
 |---|---|---|
@@ -288,9 +467,28 @@ flowchart TB
 **Rules**
 
 - With no PSU column, each row is one PSU.
-- Degrees of freedom = PSUs − strata. The CI uses the t quantile at 1 − α/2.
+- Degrees of freedom = PSUs − strata, with a minimum of 1. The CI uses the t quantile at 1 − α/2.
 - A row with a missing outcome is outside the domain of that estimate.
 - `weighted_logit` stops with `ConvergenceError` on a perfect separation.
+
+The second diagram shows how `weighted_logit` in `models.py` fits a model and gives its standard errors.
+
+```mermaid
+flowchart TD
+    IN[/"design_matrix: intercept, numeric columns,<br/>dummies with the lowest code as reference"/] --> M["Keep complete rows<br/>in the mask"]
+    M --> ENOUGH{"More complete rows<br/>than terms?"}
+    ENOUGH -- "no" --> VE[/"ValueError"/]
+    ENOUGH -- "yes" --> NEWTON["Newton step:<br/>weighted gradient and information A"]
+    NEWTON --> SING{"A singular?"}
+    SING -- "yes" --> CE[/"ConvergenceError"/]
+    SING -- "no" --> CONV{"Step below 1e-9?"}
+    CONV -- "no, under 100 steps" --> NEWTON
+    CONV -- "no, 100 steps" --> CE
+    CONV -- "yes" --> BIG{"A coefficient<br/>above 25?"}
+    BIG -- "yes" --> CE
+    BIG -- "no" --> SAND["Sandwich A⁻¹ B A⁻¹,<br/>B = variance_of_total of the scores"]
+    SAND --> OUT[/"LogitResult.table:<br/>odds ratio, t CI, p_value"/]
+```
 
 ---
 
@@ -302,6 +500,22 @@ flowchart TB
 | Q2 | `telemedqual`, `telemedsat` | Users | Users of each tool minus other users | Favourable ~ 4 tools + controls |
 | Q3 | `timedoc` | All physicians | Users minus non-users | Favourable ~ telemedicine + controls |
 
+The diagram shows the procedure of Q1, `describe`.
+
+```mermaid
+flowchart LR
+    DF[/"Decoded table"/] --> SH["design.mean of telemedicine:<br/>share of users"]
+    DF --> LOOP["For each outcome"]
+    LOOP --> UO{"Users-only item?"}
+    UO -- "yes" --> DU["Domain: users"]
+    UO -- "no" --> DA["Domain: all rows"]
+    DU --> CODES["design.mean of each code<br/>indicator: distribution"]
+    DA --> CODES
+    CODES --> FAV["design.mean of the<br/>favourable indicator"]
+    SH --> OUT[/"describe: telemedicine_share,<br/>outcomes"/]
+    FAV --> OUT
+```
+
 **Procedure (Q2)**
 
 1. Make the favourable indicator of the outcome.
@@ -309,12 +523,39 @@ flowchart TB
 3. Run the unweighted Mann-Whitney test of the raw codes as a sensitivity check. Report the rank-biserial effect.
 4. Fit the joint weighted logistic model with all tools and the controls.
 
+```mermaid
+flowchart TD
+    IN[/"Users-only outcome:<br/>telemedqual or telemedsat"/] --> FAV["favourable: 1.0 for codes 4 and 5,<br/>0.0 for other codes, NaN if missing"]
+    FAV --> TOOL["For each of the 4 tools"]
+    TOOL --> DIFF["design.difference:<br/>tool users minus other users,<br/>domain users"]
+    TOOL --> MW["_mann_whitney of the raw codes:<br/>U, p, rank-biserial"]
+    FAV --> JM["_model: weighted_logit with<br/>4 tools + 3 controls, users only"]
+    JM --> OK{"ConvergenceError<br/>or ValueError?"}
+    OK -- "yes" --> NE[/"Row: model not estimated"/]
+    OK -- "no" --> ORS[/"Odds ratios of the tools<br/>and the controls"/]
+    DIFF --> FAM[/"4 primary tests<br/>for this outcome"/]
+    MW --> SENS[/"Sensitivity check only"/]
+```
+
 **Procedure (Q3)**
 
 1. Make the favourable indicator of the outcome (for `timedoc`, the two highest time bands).
 2. Estimate the unadjusted difference between users and non-users.
 3. Run the unweighted Mann-Whitney test as a sensitivity check.
 4. Fit the weighted logistic model with the exposure and the controls.
+
+```mermaid
+flowchart TD
+    IN[/"Outcome for all physicians:<br/>timedoc"/] --> FAV["favourable: two highest<br/>time bands, codes 4 and 5"]
+    FAV --> DIFF["design.difference:<br/>users minus non-users"]
+    FAV --> MW["_mann_whitney of the raw codes,<br/>users against non-users"]
+    FAV --> AM["_model: weighted_logit with<br/>telemedicine + 3 controls, all rows"]
+    AM --> OK{"Model fitted?"}
+    OK -- "no" --> NE[/"Row: model not estimated,<br/>no primary test"/]
+    OK -- "yes" --> AOR[/"Adjusted odds ratio of telemedicine:<br/>1 primary test"/]
+    DIFF --> UD[/"unadjusted_difference"/]
+    MW --> SENS[/"Sensitivity check only"/]
+```
 
 **Rules**
 
@@ -334,6 +575,18 @@ flowchart TB
 | Sensitivity check | Unweighted two-sided Mann-Whitney U, rank-biserial = 2U / (n₁ n₂) − 1 |
 | Favourable codes | 4 and 5 for each ordinal outcome in the bundled codebook |
 
+The diagram shows how `primary_tests` and `holm` make the corrected family of tests.
+
+```mermaid
+flowchart TD
+    T2[/"Q2 per_tool differences<br/>4 for telemedqual, 4 for telemedsat"/] --> ROWS["primary_tests:<br/>one row for each test"]
+    T3[/"Q3 adjusted model<br/>telemedicine term for timedoc"/] --> ROWS
+    ROWS --> SORT["holm: sort the p-values,<br/>NaN stays NaN"]
+    SORT --> STEP["Rank r of m:<br/>p times m − r, maximum 1"]
+    STEP --> RUN["Running maximum<br/>keeps the order"]
+    RUN --> OUT[/"tests table with p_holm"/]
+```
+
 | Report file | Contents |
 |---|---|
 | `report.md` | Decode report, Q1 table, Q2 and Q3 tables, primary tests with Holm p-values, limits |
@@ -341,6 +594,19 @@ flowchart TB
 | `charts/favourable_shares.svg` | Favourable share of each outcome |
 | `charts/tools_<outcome>.svg` | Tool differences with CIs |
 | `charts/adjusted_timedoc.svg` | Adjusted odds ratios |
+
+The diagram shows how `report.write` makes the report folder from the results.
+
+```mermaid
+flowchart LR
+    RES[/"results from run_all"/] --> CH["report.charts"]
+    CH --> IC["charts.interval_chart:<br/>dot = value, line = CI"]
+    IC --> SVG[("charts/favourable_shares.svg<br/>charts/tools_outcome.svg<br/>charts/adjusted_outcome.svg")]
+    RES --> JS[("results.json")]
+    RES --> MD["report.markdown: design, decode report,<br/>Q1, Q2, Q3, Holm table, limits"]
+    DS[/"DecodeReport.summary"/] --> MD
+    MD --> RMD[("report.md")]
+```
 
 ---
 
@@ -398,6 +664,20 @@ telehealth-insights --codebook my_codebook.json analyze --data data/NEHRS2021.cs
 `python -m telehealth_insights` is the same as `telehealth-insights`.
 An error prints `error: <message>`, and the exit code is 1.
 
+The diagram shows the order of the commands and the files that connect them.
+
+```mermaid
+flowchart LR
+    INS["pip install -e .[dev]"] --> CBC["telehealth-insights codebook<br/>print roles, types, favourable codes"]
+    INS --> SYN["telehealth-insights synth"]
+    SYN --> CSV[("data/synthetic_nehrs.csv")]
+    REAL[/"data/NEHRS2021.csv<br/>local, not committed"/] --> DEC
+    CSV --> DEC["telehealth-insights decode<br/>missing-code report"]
+    DEC --> AN["telehealth-insights analyze"]
+    INS -- "no --data: 4,000 synthetic rows" --> AN
+    AN --> REP[("reports/latest/<br/>report.md, results.json, charts/")]
+```
+
 ### 10.4 Environment variables
 
 | Variable | Used by | Meaning |
@@ -410,6 +690,20 @@ An error prints `error: <message>`, and the exit code is 1.
 
 The CLI reads `--env-file` (default `.env`) first. A variable that is already set is not replaced.
 The project needs no credentials.
+
+```mermaid
+flowchart LR
+    ENV[/".env file<br/>--env-file"/] --> LD["load_env_file:<br/>sets only absent variables"]
+    PENV[/"Process environment"/] --> FE["Settings.from_env"]
+    LD --> FE
+    FE --> AL{"TELEHEALTH_ALPHA<br/>in 0 to 0.5?"}
+    AL -- "no" --> ERR[/"error: and exit 1"/]
+    AL -- "yes" --> SET["Settings: data_path, codebook_path,<br/>output_dir, seed, alpha"]
+    FLAG[/"CLI flags: --codebook,<br/>--data, --out, --seed"/] --> PICK{"Flag given?"}
+    SET --> PICK
+    PICK -- "yes" --> USEF[/"Use the flag"/]
+    PICK -- "no" --> USES[/"Use the setting<br/>or its default"/]
+```
 
 ---
 
